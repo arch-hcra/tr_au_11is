@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patchesStrategicMerge:
+  - patches/calico-production.yaml
+  - patches/kyverno-production.yaml
+
+configMapGenerator:
+  - name: cluster-info
+    literals:
+      - CLUSTER_NAME=production
+      - ENVIRONMENT=production
+
+namespace: "default"
