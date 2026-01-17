@@ -2,9 +2,7 @@ name: Deploy Infrastructure
 on:
   push:
     branches: [ main ]
-    paths:
-      - 'infrastructure/base/**'
-
+  workflow_dispatch:
 jobs:
   deploy:
     runs-on: ubuntu-latest
