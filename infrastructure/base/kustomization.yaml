@@ -5,9 +5,8 @@ resources:
   - crds/calico
   - crds/kyverno
   - istio
-  - calico  
+  - calico 
   - kyverno
-
 commonLabels:
   managed-by: kustomize
   environment: base
