@@ -46,7 +46,7 @@ jobs:
       run: |
         kustomize build infrastructure/base/ --load-restrictor LoadRestrictionsNone > /tmp/manifests.yaml
         kubectl apply --dry-run=server -f /tmp/manifests.yaml
-        echo "✅ Manifests validation passed"
+        echo " Manifests validation passed"
 
     - name: Deploy Base Infrastructure
       run: |
