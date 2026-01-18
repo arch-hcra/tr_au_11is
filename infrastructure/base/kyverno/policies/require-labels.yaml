@@ -1,10 +1,11 @@
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
 metadata:
   name: require-labels
   namespace: kyverno
 spec:
-  validationFailureAction: audit
+  validationFailureAction: Audit
+  background: true
   rules:
   - name: check-for-labels
     match:
