@@ -1,12 +1,56 @@
 name: Deploy Infrastructure
+
 on:
   push:
-    branches: [ main ]
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup Kubernetes tools
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.30.0'
+
+    - name: Setup Kustomize
+      uses: imranismail/setup-kustomize@v1
+      with:
+        kustomize-version: '5.3.0'
+
+    - name: Validate manifests syntax
+      run: |
+        if [ -d "infrastructure/base" ]; then
+          echo " Validating Kustomize syntax..."
+          kustomize build infrastructure/base/ --load-restrictor LoadRestrictionsNone > /dev/null
+          echo " Kustomize syntax validation passed"
+        else
+          echo " infrastructure/base directory not found"
+          exit 1
+        fi
+
+    - name: Validate Kubernetes schema (offline)
+      run: |
+        if [ -d "infrastructure/base" ]; then
+          echo " Validating Kubernetes schema..."
+          kustomize build infrastructure/base/ --load-restrictor LoadRestrictionsNone > /tmp/manifests.yaml
+          kubectl apply --dry-run=client -f /tmp/manifests.yaml > /dev/null
+          echo " Kubernetes schema validation passed"
+        fi
+
   deploy:
     runs-on: ubuntu-latest
+    needs: validate
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     timeout-minutes: 30
 
     steps:
@@ -41,41 +85,70 @@ jobs:
         kubectl cluster-info
         kubectl get nodes
 
-    - name: Validate manifests with dry-run
+    - name: Validate manifests with server dry-run
       run: |
         if [ -d "infrastructure/base" ]; then
+          echo " Final server-side validation..."
           kustomize build infrastructure/base/ --load-restrictor LoadRestrictionsNone > /tmp/manifests.yaml
           kubectl apply --dry-run=server -f /tmp/manifests.yaml
-          echo " Manifests validation passed"
+          echo " Server-side validation passed"
         else
-          echo " infrastructure/base directory not found, skipping validation"
+          echo " infrastructure/base directory not found"
+          exit 1
         fi
 
     - name: Deploy Base Infrastructure
       run: |
-        if [ -d "infrastructure/base" ]; then
-          kubectl apply -k infrastructure/base/ --server-side=true
-          echo " Base infrastructure deployed"
-        else
-          echo " infrastructure/base directory not found, skipping deployment"
-        fi
+        echo " Deploying to production cluster..."
+        kustomize build infrastructure/base/ --load-restrictor LoadRestrictionsNone | kubectl apply -f -
+        echo " Base infrastructure deployed"
 
-    - name: Wait for resources readiness
+    - name: Wait for critical resources readiness
       run: |
-        
-        if kubectl get deployment -n calico-system calico-kube-controllers 2>/dev/null; then
-          kubectl wait --for=condition=ready pod -l k8s-app=calico-kube-controllers -n calico-system --timeout=600s || true
-        fi
-        
-        if kubectl get deployment -n kyverno kyverno 2>/dev/null; then
-          kubectl wait --for=condition=ready pod -l app=kyverno -n kyverno --timeout=600s || true
-        fi
+        echo " Waiting for resources to become ready..."
+        wait_for_resource() {
+          local resource_type=$1
+          local namespace=$2
+          local selector=$3
+          local timeout=300
+          if kubectl get $resource_type -n $namespace $selector 2>/dev/null; then
+            echo " Waiting for $resource_type in $namespace..."
+            kubectl wait --for=condition=ready $resource_type -n $namespace $selector --timeout=${timeout}s || {
+              echo "⚠️ Timeout waiting for $resource_type, continuing..."
+              kubectl describe $resource_type -n $namespace $selector || true
+            }
+          else
+            echo "ℹ️ $resource_type not found in $namespace, skipping..."
+          fi
+        }
+
+        wait_for_resource "deployment" "calico-system" "calico-kube-controllers"
+        wait_for_resource "deployment" "kyverno" "kyverno"
+        wait_for_resource "deployment" "istio-system" "istiod"
 
         echo " Readiness checks completed"
 
     - name: Verify deployment status
       run: |
-        echo "=== Cluster overview ==="
+        echo "===  Deployment Summary ==="
+        echo " Nodes status:"
         kubectl get nodes -o wide
-        echo "=== Pods status ==="
-        kubectl get pods -A --field-selector=status.phase!=Running
+        echo ""
+        echo " Pods status (all namespaces):"
+        kubectl get pods -A --no-headers | grep -v Running | grep -v Completed || echo " All pods are Running/Completed"
+        echo ""
+        echo " Non-ready resources:"
+        kubectl get deployments -A --field-selector="status.available-replicas!=status.replicas" || echo " All deployments are ready"
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: always() && github.ref == 'refs/heads/main'
+    steps:
+    - name: Deployment status notification
+      run: |
+        if [ "${{ needs.deploy.result }}" == "success" ]; then
+          echo " Production deployment completed successfully"
+        else
+          echo " Deployment failed with status: ${{ needs.deploy.result }}"
+        fi
