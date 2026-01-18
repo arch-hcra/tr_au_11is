@@ -15,6 +15,6 @@ spec:
     spec:
       containers:
       - name: kyverno-operator
-        image: ghcr.io/kyverno/kyverno-operator:v1.16.1
+        image: ghcr.io/kyverno/kyverno-operator:v2.10.1
         ports:
         - containerPort: 9443
